@@ -1,0 +1,329 @@
+JSON Web Token (JWT) - Thực hành sử dụng refresh token khi token hết hạn với nodejs và express js
+
+JSON Web Token (JWT) là một cơ chế bảo vệ tài nguyên có thể nói đến bây giờ nó phổ biến rộng rãi đến mức nhà nhà, người người ai cũng biết đến nó. Nhưng hiện tại qua nhiều diễn đàn, vẫn còn đâu
+đó những câu hỏi như làm sao lấy lại token mới nếu như hết hạn sử dụng refresh token?
+
+Nếu như bạn đang cùng câu hỏi đó thì rất may mắn cho tôi có cơ hội để giúp bạn hiểu thông qua một bài thực hành Thực hành sử dụng refresh token khi token hết hạn với nodejs và express js. Bài này tôi 
+sẽ hướng dẫn kỹ nhất có thể, và việc của bạn chỉ đọc code từ từ và cảm nhận, sau đó là nên clone code về rồi thực hành lại một lần nữa là ngon lành.
+
+Bài thực hành này không khó nhưng bạn phải cần hiểu những khái niệm sau như:
+
+refresh token là gì?
+refresh token khác với token là gì?
+Vì sao phải có refresh token ?
+
+Rất nhiều bạn nếu đã biết và đọc nhiều về tips and tricks javascript thì sẽ biết rằng trong blog javascript này có rất nhiều bài viết về JSON Web Token. Trong đó có tất cả những 
+câu trả lời mà bạn muốn tìm hiểu nếu bạn là người mới. OK tôi chỉ nói một vài lời nhiêu đó thôi, còn để thời gian đi vào vấn đề chính của chúng ta.
+
+Creating the Project
+Như lời nói đầu ở đây tôi sử dụng nodejs + expressjs để thực hiện project này. Và tôi dùng Express application generator cho nhanh. Nếu bạn chưa biết về Express generator thì có thể install <a target="_blank" href="https://expressjs.com/en/starter/generator.html">tại đây</a>
+
+Sau khi install thành công thì thực hiện command sau để tạo project Express generator
+<pre>
+AnonyStick$ express --view=ejs refreshToken-demo
+   create : refreshToken-demo/
+   create : refreshToken-demo/public/
+   create : refreshToken-demo/public/javascripts/
+   create : refreshToken-demo/public/images/
+   create : refreshToken-demo/public/stylesheets/
+   create : refreshToken-demo/public/stylesheets/style.css
+   create : refreshToken-demo/routes/
+   create : refreshToken-demo/routes/index.js
+   create : refreshToken-demo/routes/users.js
+   create : refreshToken-demo/views/
+   create : refreshToken-demo/views/error.ejs
+   create : refreshToken-demo/views/index.ejs
+   create : refreshToken-demo/app.js
+   create : refreshToken-demo/package.json
+   create : refreshToken-demo/bin/
+   create : refreshToken-demo/bin/www
+
+   change directory:
+     $ cd refreshToken-demo
+
+   install dependencies:
+     $ npm install
+
+   run the app:
+     $ DEBUG=refreshtoken-demo:* npm start
+
+</pre>
+
+Ở đây tôi tạo name project là <code>refreshToken-demo</code> và sử dụng template là <code>ejs</code> không giải thích kỹ nha, vì ở đây qua dễ rồi.
+
+Creating Server and adding routes
+
+<pre>
+var createError = require('http-errors');
+var express = require('express');
+var path = require('path');
+var cookieParser = require('cookie-parser');
+var logger = require('morgan');
+var app = express();
+//add them
+var bodyParser = require('body-parser')
+
+app.use(bodyParser.json()) 
+app.use(bodyParser.urlencoded({ extended: true })) 
+
+var indexRouter = require('./routes/index');
+var usersRouter = require('./routes/users');
+
+
+
+// view engine setup
+app.set('views', path.join(__dirname, 'views'));
+app.set('view engine', 'ejs');
+
+app.use(logger('dev'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+app.use(cookieParser());
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.use('/', indexRouter);
+app.use('/users', usersRouter);
+
+// catch 404 and forward to error handler
+app.use(function(req, res, next) {
+  next(createError(404));
+});
+
+// error handler
+app.use(function(err, req, res, next) {
+  // set locals, only providing error in development
+  res.locals.message = err.message;
+  res.locals.error = req.app.get('env') === 'development' ? err : {};
+
+  // render the error page
+  res.status(err.status || 500);
+  res.render('error');
+});
+
+module.exports = app;
+
+</pre>
+
+Và đây là file <code>app.js</code> sau khi projetc được tạo ra ở đây không quan trọng vì chỉ khai báo package và file config mà thôi. Ở đây bạn chỉ chú ý đến <code>indexRouter</code> và 
+<code>usersRouter</code>. Tôi sẽ giải thích một chút ở đây.
+
+<code>usersRouter</code> đây là nơi chứa dữ liệu của Users. Do đó chỉ những người login thành công và có quyền mới có thể lấy được data này thông qua api dựa vào token.
+<code>indexRouter</code> đây là nơi mà router sẽ khai báo API login và API lấy lại token nếu như token hết hạn phải sử dụng refreshToken.
+
+Create files 
+
+### /router/index.js
+
+<pre>
+var express = require('express');
+var router = express.Router();
+const _CONF = require('../config')
+var jwt = require('jsonwebtoken') 
+
+var refreshTokens = {} ;// tao mot object chua nhung refreshTokens
+
+
+/* GET home page. */
+router.get('/', function(req, res, next) {
+  return res.json({status: 'success', elements: 'Hello anonystick'})
+});
+
+/* LOGIN . */
+router.post('/login', function(req, res, next) {
+  const {username, password} = req.body;
+  if(username === 'anonystick.com' && password === 'anonystick.com'){
+    let user = {
+      username: username,
+      role: 'admin'
+    }
+    const token = jwt.sign(user, _CONF.SECRET, { expiresIn: _CONF.tokenLife }) ;//20 giay
+    const refreshToken = jwt.sign(user, _CONF.SECRET_REFRESH, { expiresIn: _CONF.refreshTokenLife})
+
+    const response = {
+      "status": "Logged in",
+      "token": token,
+      "refreshToken": refreshToken,
+    }
+
+    refreshTokens[refreshToken] = response
+
+    return res.json(response)
+  }
+  return res.json({status: 'success', elements: 'Login failed!!!'})
+
+})
+
+/* Get new token when jwt expired . */
+
+router.post('/token', (req,res) => {
+  // refresh the damn token
+  const {refreshToken} = req.body
+  // if refresh token exists
+  if(refreshToken && (refreshToken in refreshTokens)) {
+      const user = {
+          username: 'anonystick.com',
+          role: 'admin'
+      }
+      const token = jwt.sign(user, _CONF.SECRET, { expiresIn: _CONF.tokenLife})
+      const response = {
+          "token": token,
+      }
+      // update the token in the list
+      refreshTokens[refreshToken].token = token
+      res.status(200).json(response);        
+  } else {
+      res.status(404).send('Invalid request')
+  }
+})
+
+module.exports = router;
+</pre>
+
+### /routes/users.js
+
+<pre>
+var express = require('express');
+var router = express.Router();
+
+
+router.use(require('../middleware/checkToken'))
+/* GET users listing. */
+router.get('/', function (req, res) {
+  const users = [{
+    username: 'Cr7',
+    team: 'Juve',
+  }, {
+    username: 'Messi',
+    team: 'Barca',
+  }]
+  res.json({ status: 'success', elements: users })
+})
+
+module.exports = router;
+</pre>
+
+### config/index.js
+
+<pre>
+const config = Object.freeze({
+    SECRET:"SECRET_ANONYSTICK",
+    SECRET_REFRESH: "SECRET_REFRESH_ANONYSTICK",
+    tokenLife: 10,
+    refreshTokenLife: 120
+})
+
+module.exports = config;
+</pre>
+
+
+### middleware/checkToken.js
+
+<pre>
+const jwt = require('jsonwebtoken')
+const _CONF = require('../config/')
+
+module.exports = (req, res, next) => {
+  const token = req.body.token || req.query.token || req.headers['x-access-token']
+  // decode token
+  if (token) {
+    // verifies secret and checks exp
+    jwt.verify(token, _CONF.SECRET, function(err, decoded) {
+        if (err) {
+            console.error(err.toString());
+            //if (err) throw new Error(err)
+            return res.status(401).json({"error": true, "message": 'Unauthorized access.', err });
+        }
+        console.log(`decoded>>${decoded}`);
+        req.decoded = decoded;
+        next();
+    });
+  } else {
+    // if there is no token
+    // return an error
+    return res.status(403).send({
+        "error": true,
+        "message": 'No token provided.'
+    });
+  }
+}
+</pre>
+
+Nhìn vào đoạn code thì không khó để hiểu nhưng ở đây tôi muốn bạn chú ý đến những đoạn code sau: 
+
+<pre>
+const token = jwt.sign(user, _CONF.SECRET, { expiresIn: _CONF.tokenLife }) ;//20 giay
+const refreshToken = jwt.sign(user, _CONF.SECRET_REFRESH, { expiresIn: _CONF.refreshTokenLife})
+</pre>
+
+Khi một tài khoản login thành công thì hệ thống sẽ sinh ra hai token đó là token và refreshToken. Đương nhiên thời gian sống của hai token này khác nhau vì sao thì tôi có nói trong bài viết trước kia.
+Và người đó sẽ nhận được và lưu trữ ở client. Về các lưu trữ token thì nên lưu ở đâu thì chúng tôi cũng có nói ở bài viết này.
+
+<pre>
+const response = {
+    "status": "Logged in",
+    "token": token,
+    "refreshToken": refreshToken,
+}
+
+refreshTokens[refreshToken] = response
+</pre>
+
+Và chúng tôi sẽ lưu trữ những refreshToken trên server dùng vào nhiều mục đích khác nhau như lấy lại token nếu hết hạn, hoặc chặn ngay những hành động hacker thì chiếm đoạt token của User.
+
+Tips: Tốt hơn hết bạn nên lưu trữ refreshToken ở redis vì khi reload server thì nó sẽ mất nếu như theo bài viết này.
+
+<pre>
+router.use(require('../middleware/checkToken'))
+</pre>
+
+Tiếp theo là tôi tạo một file middleware có tác dụng check token hợp lệ trước khi truy cập tài nguyên, nhìn vào bạn sẽ rõ hơn.
+<pre>
+
+router.use(require('../middleware/checkToken'))
+/* GET users listing. */
+router.get('/', function (req, res) {
+  const users = [{
+    username: 'Cr7',
+    team: 'Juve',
+  }, {
+    username: 'Messi',
+    team: 'Barca',
+  }]
+  res.json({ status: 'success', elements: users })
+})
+</pre>
+
+Và nếu token không hợp lệ đương nhiên bạn không thể truy cập vào tài nguyên Users được đâu.
+
+Run code 
+Sau khi clone code về bạn có thể dùng command để run như sau:
+
+<pre>
+AnonyStick$ npm start
+</pre>
+
+Và hãy mớ Postman lên để thử xem nhé. Đầu tiên tôi chưa login và tôi sẽ thử truy cập vào danh sách User
+
+<p style="text-align:center"><img data-lazy="https://res.cloudinary.com/anonystick/image/upload/v1594875260/javascript/jwt-no-login.jpg" alt="refresh Token là gì?"></p>
+Bạn có thể nhìn thấy chúng ta không thể truy cập được. Bạn cũng có thể thử với một token tùm lum nào đó.
+
+Tiếp theo tôi sẽ login với tài khoản là anonystick.com
+
+<p style="text-align:center"><img data-lazy="https://res.cloudinary.com/anonystick/image/upload/v1594875458/javascript/jwt-la-gi.jpg" alt="jwt là gì?"></p>
+
+Khi login thành công thì client sẽ nhận được 2 token bao gồm <code>token</code> và <code>refreshToken</code> Sau đó bạn sử dụng <code>token</code> để truy cập vào list user.
+<p style="text-align:center"><img data-lazy="https://res.cloudinary.com/anonystick/image/upload/v1594877149/javascript/token-la-gi.jpg" alt="token là gì?"></p>
+
+
+Sau thời gian mà chúng ta đã setting trong file config thì token sẽ hết hạn như thế này.
+
+<p style="text-align:center"><img data-lazy="https://res.cloudinary.com/anonystick/image/upload/v1594877233/javascript/token-expired-jwt.jpg" alt="token expired jwt"></p>
+
+Khi hết hạn token thì chúng ta sẽ sử dụng post /token để lấy lại token mới sử dụng refreshToken mà login đã có
+
+<p style="text-align:center"><img data-lazy="https://res.cloudinary.com/anonystick/image/upload/v1594877360/javascript/using-refresh-token-get-new-token.jpg" alt="sử dụng refreshToken lấy token mới"></p>
+
+Đây là code full: 
+
+
+
